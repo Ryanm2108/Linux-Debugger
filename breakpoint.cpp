@@ -39,7 +39,7 @@ void BreakPoint:: enable(){
     uint64_t data_with_trap = 0;
 #if defined(__aarch64__)
     data_with_trap = (orig_instruction & 0xFFFFFFFF00000000) | 0xd4200000;
-#elif defined(__amd64__)
+#elif defined(__x86_64__)
     data_with_trap = (orig_instruction & ~0xFFULL) | 0xCC;
 #else
 #error Unsupported architecture
