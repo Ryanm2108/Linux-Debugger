@@ -97,6 +97,7 @@ int main(int argc, char** argv){
 
         ptrace(PTRACE_GETREGSET, child, NT_PRSTATUS, &iov);
 
+        // lambda for breakpoint handling
         auto handle_sigtrap = [&](user_regs_struct &regs) {
 
             uint64_t bp_addr = regs.pc - 4;
