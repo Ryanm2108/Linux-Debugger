@@ -91,7 +91,7 @@ int main(int argc, char** argv){
 
         // breakpoint lazy step over helper variables
         bool pending;
-        uint64_t pending_id;
+        uint64_t pending_id = 0;
 
         struct user_regs_struct regs;
 
@@ -123,6 +123,14 @@ int main(int argc, char** argv){
             return true;
         };
 
+        auto lazy_stepover_helper = [&](uint64_t bp_id){
+            ptrace(PTRACE_SINGLESTEP, child, 0, 0);
+            waitpid(child, &wait_status, 0);
+
+            breakpoints[bp_id].bp.enable();
+
+        }
+            
         while(!WIFEXITED(wait_status)){
             if (!getline(cin, line)) {
                 break;
@@ -161,6 +169,11 @@ int main(int argc, char** argv){
 
             }
             else if(cmd == "c"){
+                if(pending_id != 0){
+                    lazy_stepover_helper(pending_id);
+                    pending_id = 0;
+                }
+                
                 ptrace(PTRACE_CONT, child, 0,0);
                 waitpid(child, &wait_status, 0);
 
@@ -173,6 +186,13 @@ int main(int argc, char** argv){
                 }
             }
             else if(cmd == "s"){
+                if(pending_id != 0){
+                    lazy_stepover_helper(pending_id);
+                    pending_id = 0;
+
+                    continue; // this internal single step counts as one !
+                }
+                
                 ptrace(PTRACE_SINGLESTEP, child, 0, 0);
                 waitpid(child, &wait_status, 0);
 
