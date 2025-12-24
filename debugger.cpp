@@ -89,6 +89,10 @@ int main(int argc, char** argv){
         unordered_map<uint64_t, uint64_t> addr_to_id;
         uint64_t next_bp_id = 1;
 
+        // breakpoint lazy step over helper variables
+        bool pending;
+        uint64_t pending_id;
+
         struct user_regs_struct regs;
 
         struct iovec iov;
@@ -114,11 +118,7 @@ int main(int argc, char** argv){
             regs.pc = bp_addr;
             ptrace(PTRACE_SETREGSET, child, NT_PRSTATUS, &iov);
 
-            ptrace(PTRACE_SINGLESTEP, child, 0, 0);
-            waitpid(child, &wait_status, 0);
-
-            ptrace(PTRACE_GETREGSET, child, NT_PRSTATUS, &iov);
-            it->second.bp.enable();
+            pending_id = id_it->second;
 
             return true;
         };
