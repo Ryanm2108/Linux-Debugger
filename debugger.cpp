@@ -129,7 +129,7 @@ int main(int argc, char** argv){
 
             breakpoints[bp_id].bp.enable();
 
-        }
+        };
             
         while(!WIFEXITED(wait_status)){
             if (!getline(cin, line)) {
