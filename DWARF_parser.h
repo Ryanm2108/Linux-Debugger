@@ -13,7 +13,7 @@ class DwarfParser {
 
     public:
         DwarfParser();
-        void load_symbols(string binary_path);
+        void load_symbols(const char* binary_path);
         uint64_t get_function_addr(string func_name);
 
     private:
