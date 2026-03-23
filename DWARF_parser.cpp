@@ -31,3 +31,17 @@ void DwarfParser::load_symbols(const char* binary_path) {
 }   
 
 
+void parse_compilation_unit(Dwarf_Die cu_die) {
+    check_die(cu_die);
+}
+
+void check_die(Dwarf_Die current_die){
+
+    
+
+    dwarf_tag(current_die, &DW_TAG_compile_unit, &err);
+
+    if(dwarf_tag == DW_TAG_subprogram){
+
+    }
+}
