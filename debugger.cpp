@@ -12,6 +12,7 @@
 #include <unordered_map>
 #include <cerrno>
 #include <cstring>
+#include "DWARF_parser.h"
 
 using namespace std;
 
@@ -72,6 +73,9 @@ int main(int argc, char** argv){
     }
 
     const char* program = argv[1];
+
+    DwarfParser parser;
+    parser.load_symbols(program);
 
     pid_t child = fork();
 
@@ -148,11 +152,18 @@ int main(int argc, char** argv){
             if(cmd == "b"){
                 uint64_t addr = 0;
 
-                if (!parse_addr(arg, addr)) {
-                    cerr << "usage: b <addr>" << endl;
+                if(arg == ""){
+                    cerr << "usage: b <arg>" << endl;
                     continue;
                 }
 
+                if (!parse_addr(arg, addr)) {
+                    addr = parser.get_function_addr(arg);
+                    if(addr == 0){
+                    cerr << "usage: b <addr|name>" << endl;
+                    continue;
+                    }
+                }
                 auto id_it = addr_to_id.find(addr);
                 if (id_it == addr_to_id.end()) {
                     uint64_t id = next_bp_id++;
@@ -166,7 +177,7 @@ int main(int argc, char** argv){
                     it->second.bp.enable();
                 }
                 continue;
-
+                
             }
             else if(cmd == "c"){
                 if(pending_id != 0){
@@ -215,7 +226,7 @@ int main(int argc, char** argv){
             }
             else if(cmd == "h"){
                 cout << "Commands:\n";
-                cout << "  b <addr>   set breakpoint\n";
+                cout << "  b <addr|func>   set breakpoint\n";
                 cout << "  bl         list breakpoints\n";
                 cout << "  bd <id|addr>  disable breakpoint\n";
                 cout << "  del <id|addr> delete breakpoint\n";

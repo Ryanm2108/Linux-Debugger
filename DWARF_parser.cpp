@@ -2,6 +2,7 @@
 #include <string>
 #include <elf.h>
 #include <libdwarf/libdwarf.h>
+#include <libdwarf/dwarf.h>
 #include <DWARF_parser.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -31,17 +32,49 @@ void DwarfParser::load_symbols(const char* binary_path) {
 }   
 
 
-void parse_compilation_unit(Dwarf_Die cu_die) {
+void DwarfParser::parse_compilation_unit(Dwarf_Die cu_die) {
     check_die(cu_die);
 }
 
-void check_die(Dwarf_Die current_die){
+void DwarfParser::check_die(Dwarf_Die current_die){
 
+    Dwarf_Error error;
+    Dwarf_Half tag = 0;
+
+    if(dwarf_tag(current_die, &tag, &error) != DW_DLV_OK){
+    return;
+    }
+
+    if(tag == DW_TAG_subprogram){
+        char* name = nullptr;
+        Dwarf_Addr low_pc = 0;
+
+        if (dwarf_diename(current_die, &name, &error) == DW_DLV_OK &&
+            dwarf_lowpc(current_die, &low_pc, &error) == DW_DLV_OK) {
+            hash_map[name] = static_cast<uint64_t>(low_pc);
+        }
+    }
+
+    Dwarf_Die child = nullptr;
+    if (dwarf_child(current_die, &child, &error) == DW_DLV_OK) {
+        check_die(child);
+    }
+
+     Dwarf_Die sibling = child;
+        while (dwarf_siblingof(pointer, sibling, &sibling, &error) == DW_DLV_OK) {
+            check_die(sibling);
+        }
     
 
-    dwarf_tag(current_die, &DW_TAG_compile_unit, &err);
+}
 
-    if(dwarf_tag == DW_TAG_subprogram){
+uint64_t DwarfParser::get_function_addr(string func_name){
 
+    auto it = hash_map.find(func_name);
+
+    if(it == hash_map.end()){
+        return 0;
     }
+
+    return it->second;
 }
