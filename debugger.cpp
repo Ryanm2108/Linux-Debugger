@@ -217,12 +217,59 @@ int main(int argc, char** argv){
             }
             else if(cmd == "regs"){ 
                 ptrace(PTRACE_GETREGSET, child, NT_PRSTATUS, &iov);
-                printf("PC: %llx\n", regs.pc);
-
+                for(int i = 0; i < 31; i++){
+                    printf("x%d : 0x%llx\n", i, (unsigned long long)regs.regs[i]);
+                }
+                 printf("sp: %llx\n", (unsigned long long)regs.sp);
+                 printf("pc: %llx\n", (unsigned long long)regs.pc);
+                 printf("pstate: %llx\n", (unsigned long long)regs.pstate);
             }
             else if(cmd == "q"){
                 ptrace(PTRACE_DETACH, child, 0, 0);
                 break;
+            }
+            else if(cmd == "n"){
+                bool temp_created = false;
+
+                if(pending_id != 0){
+                    lazy_stepover_helper(pending_id);
+                    pending_id = 0;
+                }
+                ptrace(PTRACE_GETREGSET, child, NT_PRSTATUS, &iov);
+                auto next_addr = regs.pc + 4;
+
+                auto id_it = addr_to_id.find(next_addr);
+                if (id_it == addr_to_id.end()) {
+                    temp_created = true; 
+                    uint64_t id = next_bp_id++;
+                    breakpoints.emplace(id, BreakpointEntry(id, next_addr, child));
+                    addr_to_id.emplace(next_addr, id);
+                    id_it = addr_to_id.find(next_addr);
+                }
+
+                auto it = breakpoints.find(id_it->second);
+                if (it != breakpoints.end()) {
+                    it->second.bp.enable();
+                }
+
+
+                ptrace(PTRACE_CONT, child, 0,0);
+                waitpid(child, &wait_status, 0);
+
+                if (WIFSTOPPED(wait_status) && WSTOPSIG(wait_status) == SIGTRAP) {
+                    ptrace(PTRACE_GETREGSET, child, NT_PRSTATUS, &iov);
+                    handle_sigtrap(regs);
+
+                    auto it = breakpoints.find(id_it->second);
+                    if (it != breakpoints.end()) {
+                        if(temp_created == true){
+                            it->second.bp.disable();
+                            addr_to_id.erase(it->second.addr);
+                            breakpoints.erase(it);
+                        }
+                    }
+                }
+
             }
             else if(cmd == "h"){
                 cout << "Commands:\n";
@@ -355,24 +402,39 @@ int main(int argc, char** argv){
                 }
                 it->second.bp.enable();
             }
-            else if (cmd == "x"){
-                // read mem( i didnt know what to check user_input with so I made it the else)
+            else if (cmd[0] == 'x'){
+                int count = 1;
+
+               if (cmd.size() > 2 && cmd[0] == 'x' && cmd[1] == '/') {
+                    string count_str = cmd.substr(2);
+                    bool bad = false;
+                    for (char ch : count_str) {
+                        if (ch < '0' || ch > '9') { bad = true; break; }
+                    }
+                    if (bad) {
+                        cerr << "usage: x/<count> <addr>" << endl;
+                        continue;
+                    }
+                    count = stoi(count_str);
+                }
+
                 uint64_t addr = 0;
 
                 if (!parse_addr(arg, addr)) {
-                    cerr << "usage: x <addr>" << endl;
+                    cerr << "usage: x/<count> <addr>" << endl;
                     continue;
                 }
 
-                errno = 0;
-                long data = ptrace(PTRACE_PEEKDATA, child, addr, 0);
-                if(data == -1 && errno != 0){
+                for(int i = 0; i < count; i++){
+                    uint64_t cur = addr + i * sizeof(long);
+                    errno = 0;
+                    long data = ptrace(PTRACE_PEEKDATA, child, cur, 0);
+                    if(data == -1 && errno != 0){
                     std::cerr << "peekdata failed: " << strerror(errno) << "\n";
                     continue;   
+                    }
+                    printf("0x%llx: 0x%lx\n", (unsigned long long)cur, data);
                 }
-                printf("0x%llx: 0x%lx\n", (unsigned long long)addr, data);
-                // <addr> refers to the address at which mem is to be read from. it's passed in as an arg.
-                // yet to be fixed
             }
             else{
                 std::cerr << "unknown command: " << cmd << "\n";
