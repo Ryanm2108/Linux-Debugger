@@ -79,6 +79,23 @@ int read_memory_func(bfd_vma memaddr, bfd_byte *myaddr, unsigned int length, dis
     return 0;
 }
 
+// watchpoint helper
+
+bool read_mem(pid_t pid, uint64_t addr, long* out_value){
+    errno = 0;
+    long data = ptrace(PTRACE_PEEKDATA, pid, addr, 0);
+    if(data == -1 && errno != 0){
+        return false;
+    }
+    else if (out_value == nullptr){
+        return false;
+    }
+    else{
+        *out_value = data;
+        return true;
+    }
+}
+
 
 struct BreakpointEntry {
     uint64_t id;
@@ -116,6 +133,12 @@ int main(int argc, char** argv){
         unordered_map<uint64_t, BreakpointEntry> breakpoints;
         unordered_map<uint64_t, uint64_t> addr_to_id;
         uint64_t next_bp_id = 1;
+
+        // watchpoints
+        bool watch_active = false;
+        uint64_t watch_addr = 0;
+        long watch_value = 0;
+
 
         // breakpoint lazy step over helper variables
         bool pending;
@@ -216,6 +239,8 @@ int main(int argc, char** argv){
                 
             }
             else if(cmd == "c"){
+                long out_val;
+
                 if(pending_id != 0){
                     lazy_stepover_helper(pending_id);
                     pending_id = 0;
@@ -223,6 +248,19 @@ int main(int argc, char** argv){
                 
                 ptrace(PTRACE_CONT, child, 0,0);
                 waitpid(child, &wait_status, 0);
+
+                if(WIFSTOPPED(wait_status)){
+                    if(watch_active){
+                        if(!read_mem(child, watch_addr, &out_val)){
+                        cerr << "mem couldn't be read.>" << endl;
+                        continue;
+                        }
+                        if(out_val != watch_value){
+                            printf("watchpoint hit at 0x%llu : old=0x%llu new=0x%llu", watch_addr, watch_value, out_val);
+                            watch_value = out_val;
+                        }
+                    }
+                }
 
                 if (WIFSTOPPED(wait_status) && WSTOPSIG(wait_status) == SIGTRAP) {
                     ptrace(PTRACE_GETREGSET, child, NT_PRSTATUS, &iov);
@@ -233,6 +271,7 @@ int main(int argc, char** argv){
                 }
             }
             else if(cmd == "s"){
+                long out_val;
                 if(pending_id != 0){
                     lazy_stepover_helper(pending_id);
                     pending_id = 0;
@@ -242,6 +281,19 @@ int main(int argc, char** argv){
                 
                 ptrace(PTRACE_SINGLESTEP, child, 0, 0);
                 waitpid(child, &wait_status, 0);
+
+                if(WIFSTOPPED(wait_status)){
+                    if(watch_active){
+                        if(!read_mem(child, watch_addr, &out_val)){
+                        cerr << "mem couldn't be read.>" << endl;
+                        continue;
+                        }
+                        if(out_val != watch_value){
+                            printf("watchpoint hit at 0x%llu : old=0x%llu new=0x%llu", watch_addr, watch_value, out_val);
+                            watch_value = out_val;
+                        }
+                    }
+                }
 
                 if (WIFSTOPPED(wait_status) && WSTOPSIG(wait_status) == SIGTRAP) {
                     ptrace(PTRACE_GETREGSET, child, NT_PRSTATUS, &iov);
@@ -277,6 +329,7 @@ int main(int argc, char** argv){
                 }
             }
             else if(cmd == "n"){
+                long out_val;
                 bool temp_created = false;
 
                 if(pending_id != 0){
@@ -303,6 +356,19 @@ int main(int argc, char** argv){
 
                 ptrace(PTRACE_CONT, child, 0,0);
                 waitpid(child, &wait_status, 0);
+
+                if(WIFSTOPPED(wait_status)){
+                    if(watch_active){
+                        if(!read_mem(child, watch_addr, &out_val)){
+                        cerr << "mem couldn't be read.>" << endl;
+                        continue;
+                        }
+                        if(out_val != watch_value){
+                            printf("watchpoint hit at 0x%llu : old=0x%llu new=0x%llu", watch_addr, watch_value, out_val);
+                            watch_value = out_val;
+                        }
+                    }
+                }
 
                 if (WIFSTOPPED(wait_status) && WSTOPSIG(wait_status) == SIGTRAP) {
                     ptrace(PTRACE_GETREGSET, child, NT_PRSTATUS, &iov);
@@ -538,6 +604,66 @@ int main(int argc, char** argv){
                     printf("\n");
                 }
                
+            }
+            // watch <addr>
+            else if (cmd == "watch"){
+
+                long out_val;
+
+                uint64_t addr = 0;
+
+                if(arg == ""){
+                    cerr << "usage: watch <addr>" << endl;
+                    continue;
+                }
+
+                if (!parse_addr(arg, addr)) {
+                    cerr << "usage: watch <addr>" << endl;
+                    continue;
+                }
+
+                if(!read_mem(child, addr, &out_val)){
+                    cerr << "mem couldn't be read.>" << endl;
+                    continue;
+                }
+
+                watch_active = true;
+                watch_addr = addr;
+                watch_value = out_val;
+
+                printf("watching 0x%llu (value: 0x%llu)", watch_addr, watch_value);
+
+            }
+            else if(cmd == "wc"){
+                long out_val;
+
+                if(!watch_active){
+                    printf("No watchpoints set");
+                    continue;
+                }
+
+                while(true){
+                    ptrace(PTRACE_SINGLESTEP, child, 0, 0);
+                    waitpid(child, &wait_status, 0);
+
+                    if(WIFEXITED(wait_status)){
+                        break;
+                    }
+
+
+                    if(!read_mem(child, watch_addr, &out_val)){
+                        cerr << "mem couldn't be read.>" << endl;
+                        break;
+                    }
+
+                    if(watch_value != out_val){
+                        printf("Value changed");
+                        watch_value = out_val;
+                        break;
+                    }
+
+                }
+
             }
             else{
                 std::cerr << "unknown command: " << cmd << "\n";
