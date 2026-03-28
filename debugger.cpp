@@ -14,6 +14,9 @@
 #include <cstring>
 #include "DWARF_parser.h"
 #include <signal.h>
+#include <dis-asm.h>
+#include <bfd.h>
+
 
 const int max_depth = 32;
 
@@ -61,6 +64,22 @@ static bool parse_id(const std::string &input, uint64_t &out_id) {
     return true;
 }
 
+int read_memory_func(bfd_vma memaddr, bfd_byte *myaddr, unsigned int length, disassemble_info *info){
+    pid_t pid = *(pid_t*)info->application_data;
+    for(int i =0; i < length ; i++){
+        uint64_t aligned_addr = (memaddr+i) & ~7UL;
+       long data = ptrace(PTRACE_PEEKDATA, pid, aligned_addr, 0);
+       if (data == (unsigned long long)-1 && errno != 0) return EIO;
+
+       int byte_offset = (memaddr + i) & 7;
+       
+        myaddr[i] = (data >> (byte_offset * 8)) & 0xFF;
+    }
+
+    return 0;
+}
+
+
 struct BreakpointEntry {
     uint64_t id;
     uint64_t addr;
@@ -79,6 +98,8 @@ int main(int argc, char** argv){
 
     DwarfParser parser;
     parser.load_symbols(program);
+
+    bfd_init();
 
     pid_t child = fork();
 
@@ -137,7 +158,19 @@ int main(int argc, char** argv){
             breakpoints[bp_id].bp.enable();
 
         };
-            
+
+        disassemble_info dinfo;
+
+        init_disassemble_info(&dinfo, stdout, (fprintf_ftype)fprintf, nullptr);
+
+        dinfo.arch = bfd_arch_aarch64;
+        dinfo.mach = bfd_mach_aarch64;
+
+        dinfo.endian = BFD_ENDIAN_LITTLE;
+        dinfo.read_memory_func = read_memory_func;
+        dinfo.application_data = &child;
+    
+
         while(!WIFEXITED(wait_status)){
             if (!getline(cin, line)) {
                 break;
@@ -477,6 +510,34 @@ int main(int argc, char** argv){
                     r29 = prev_fp;
 
                 }
+            }
+            else if(cmd == "disasm"){
+                disassembler_ftype disasm_fn;
+                uint64_t addr;
+                ptrace(PTRACE_GETREGSET, child, NT_PRSTATUS, &iov);
+                if(arg == ""){
+                    addr = regs.pc;
+                }
+                else{
+                    if (!parse_addr(arg, addr)) {
+                    addr = parser.get_function_addr(arg);
+                    if(addr == 0){
+                    cerr << "usage: disasm [addr|func]" << endl;
+                    continue;
+                    }
+                    }
+                }
+            
+                disasm_fn = disassembler(bfd_arch_aarch64, false, bfd_mach_aarch64, nullptr);
+                for(int i =0; i < 10; i++){
+                    printf("0x%lx:  ", addr);
+                    int size = disasm_fn(addr, &dinfo);
+                    addr += size;
+
+
+                    printf("\n");
+                }
+               
             }
             else{
                 std::cerr << "unknown command: " << cmd << "\n";
