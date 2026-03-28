@@ -8,6 +8,7 @@ using namespace std;
 class DwarfParser {
 
     unordered_map<string, uint64_t> hash_map;
+    unordered_map<uint64_t, string> addr_to_name;
     int file_id;
     Dwarf_Debug pointer;
 
@@ -15,6 +16,7 @@ class DwarfParser {
         DwarfParser();
         void load_symbols(const char* binary_path);
         uint64_t get_function_addr(string func_name);
+        string get_function_name(uint64_t addr);
 
     private:
         void parse_compilation_unit(Dwarf_Die cu_die);

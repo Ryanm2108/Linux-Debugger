@@ -11,6 +11,7 @@ DwarfParser:: DwarfParser() {
     file_id = -1;
     pointer = nullptr;
     hash_map.clear();
+    addr_to_name.clear();
 }
 
 void DwarfParser::load_symbols(const char* binary_path) {
@@ -52,6 +53,7 @@ void DwarfParser::check_die(Dwarf_Die current_die){
         if (dwarf_diename(current_die, &name, &error) == DW_DLV_OK &&
             dwarf_lowpc(current_die, &low_pc, &error) == DW_DLV_OK) {
             hash_map[name] = static_cast<uint64_t>(low_pc);
+            addr_to_name[static_cast<uint64_t>(low_pc)] = name;
         }
     }
 
@@ -78,3 +80,15 @@ uint64_t DwarfParser::get_function_addr(string func_name){
 
     return it->second;
 }
+
+string DwarfParser::get_function_name(uint64_t addr){
+
+    auto it = addr_to_name.find(addr);
+
+    if(it == addr_to_name.end()){
+        return "";
+    }
+
+    return it->second;
+}
+

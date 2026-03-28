@@ -13,6 +13,9 @@
 #include <cerrno>
 #include <cstring>
 #include "DWARF_parser.h"
+#include <signal.h>
+
+const int max_depth = 32;
 
 using namespace std;
 
@@ -225,8 +228,20 @@ int main(int argc, char** argv){
                  printf("pstate: %llx\n", (unsigned long long)regs.pstate);
             }
             else if(cmd == "q"){
-                ptrace(PTRACE_DETACH, child, 0, 0);
-                break;
+                string ans;
+                printf("The program is running. Quit anyway (and kill it)? (y or n)\n");
+                if(!getline(cin, ans)){
+                    break;
+                }
+                if(ans.empty() || (ans != "y" && ans != "Y")){
+                    continue;
+                }
+                else{
+                    ptrace(PTRACE_DETACH, child, 0, 0);
+                    kill(child, SIGKILL);
+                    waitpid(child, &wait_status, 0);
+                    break;
+                }
             }
             else if(cmd == "n"){
                 bool temp_created = false;
@@ -434,6 +449,33 @@ int main(int argc, char** argv){
                     continue;   
                     }
                     printf("0x%llx: 0x%lx\n", (unsigned long long)cur, data);
+                }
+            }
+            else if(cmd == "bt"){
+                int depth = 0;
+
+                ptrace(PTRACE_GETREGSET, child, NT_PRSTATUS, &iov);
+                unsigned long long r29 = regs.regs[29];
+                unsigned long long ret = regs.regs[30];
+
+                printf("#0 pc: %llx frame0: %llx\n", (unsigned long long)regs.pc, (unsigned long long)ret);
+
+                while(r29 != 0 && depth < max_depth){
+                    depth++;
+                    uint64_t prev_fp = ptrace(PTRACE_PEEKDATA, child, r29, 0);
+                    ret = ptrace(PTRACE_PEEKDATA, child, r29+8, 0);
+
+                    string name = parser.get_function_name(ret);
+                    if(name != ""){
+                         printf("#%d name: %s ret: %llx\n", depth, name.c_str(), (unsigned long long)ret);
+                    }
+                    else{
+                        printf("#%d ret: %llx\n", depth, (unsigned long long)ret);
+                    }
+                   
+
+                    r29 = prev_fp;
+
                 }
             }
             else{
