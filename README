@@ -1,1 +1,32 @@
-Linux debugger
+Linux Debugger
+
+A ptrace-based debugger for AArch64 Linux. Supports breakpoints, stepping, register inspection, memory reading, backtracing, DWARF symbol resolution, and disassembly.
+
+## Build
+
+Requires binutils-dev and libdw-dev:
+
+    sudo apt install binutils-dev libdw-dev
+
+    g++ debugger.cpp breakpoint.cpp DWARF_parser.cpp -o debugger -lbfd -lopcodes -ldw
+
+## Usage
+
+    ./debugger <program>
+
+## Commands
+
+    b <addr|func>       set breakpoint at address or function name
+    bl                  list breakpoints
+    bd <id|addr>        disable breakpoint
+    enable <id|addr>    enable breakpoint
+    del <id|addr>       delete breakpoint
+    c                   continue execution
+    s                   single-step one instruction
+    n                   step over (next line)
+    regs                print all registers
+    x/<count> <addr>    read memory (e.g. x/4 0x4006c0)
+    bt                  print backtrace
+    disasm [addr|func]  disassemble 10 instructions from addr, func, or current PC
+    q                   quit and kill tracee
+    h                   help
