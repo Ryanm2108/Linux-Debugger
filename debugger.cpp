@@ -16,7 +16,7 @@
 #include <signal.h>
 #include <dis-asm.h>
 #include <bfd.h>
-
+#include <functional>
 
 const int max_depth = 32;
 
@@ -101,8 +101,12 @@ struct BreakpointEntry {
     uint64_t id;
     uint64_t addr;
     BreakPoint bp;
+    bool has_cond;
+    string cond_reg;
+    uint64_t cond_value;
+    string cond_op;
     BreakpointEntry(uint64_t id_in, uint64_t addr_in, pid_t pid_in)
-        : id(id_in), addr(addr_in), bp(addr_in, pid_in) {}
+        : id(id_in), addr(addr_in), bp(addr_in, pid_in), has_cond(false), cond_reg(""), cond_value(0), cond_op("") {}
 };
 
 int main(int argc, char** argv){
@@ -152,27 +156,85 @@ int main(int argc, char** argv){
 
         ptrace(PTRACE_GETREGSET, child, NT_PRSTATUS, &iov);
 
-        // lambda for breakpoint handling
-        auto handle_sigtrap = [&](user_regs_struct &regs) {
-
+        std::function<bool(user_regs_struct&)> handle_sigtrap;
+        handle_sigtrap = [&](user_regs_struct &regs) -> bool {
             uint64_t bp_addr = regs.pc - 4;
+
             auto id_it = addr_to_id.find(bp_addr);
             if (id_it == addr_to_id.end()) {
                 return false;
             }
+
             auto it = breakpoints.find(id_it->second);
             if (it == breakpoints.end() || !it->second.bp.is_enabled()) {
                 return false;
             }
 
+            // Helper to fetch register value by name
+            auto get_reg_val = [&](const string& name, uint64_t &out) -> bool {
+                if (name == "pc") { out = regs.pc; return true; }
+                if (name == "sp") { out = regs.sp; return true; }
+                if (name == "pstate") { out = regs.pstate; return true; }
+                if (name.size() >= 2 && name[0] == 'x') {
+                    string idx_str = name.substr(1);
+                    for (char ch : idx_str) {
+                        if (ch < '0' || ch > '9') return false;
+                    }
+                    int idx = stoi(idx_str);
+                    if (idx < 0 || idx > 30) return false;
+                    out = regs.regs[idx];
+                    return true;
+                }
+                return false;
+            };
+
+            // If conditional, evaluate it
+            if (it->second.has_cond) {
+                uint64_t regval = 0;
+                if (!get_reg_val(it->second.cond_reg, regval)) {
+                    // invalid register name -> treat as no match, keep running
+                    it->second.bp.enable();
+                    ptrace(PTRACE_CONT, child, 0, 0);
+                    waitpid(child, &wait_status, 0);
+                    if (WIFSTOPPED(wait_status) && WSTOPSIG(wait_status) == SIGTRAP) {
+                        ptrace(PTRACE_GETREGSET, child, NT_PRSTATUS, &iov);
+                        return handle_sigtrap(regs);
+                    }
+                    return false;
+                }
+
+                bool cond_ok = false;
+                const string &op = it->second.cond_op;
+                uint64_t rhs = it->second.cond_value;
+
+                if (op == "==") cond_ok = (regval == rhs);
+                else if (op == "!=") cond_ok = (regval != rhs);
+                else if (op == "<") cond_ok = (regval < rhs);
+                else if (op == "<=") cond_ok = (regval <= rhs);
+                else if (op == ">") cond_ok = (regval > rhs);
+                else if (op == ">=") cond_ok = (regval >= rhs);
+
+                if (!cond_ok) {
+                    // Condition false: re-enable bp and keep running
+                    it->second.bp.enable();
+                    ptrace(PTRACE_CONT, child, 0, 0);
+                    waitpid(child, &wait_status, 0);
+                    if (WIFSTOPPED(wait_status) && WSTOPSIG(wait_status) == SIGTRAP) {
+                        ptrace(PTRACE_GETREGSET, child, NT_PRSTATUS, &iov);
+                        return handle_sigtrap(regs);
+                    }
+                    return false;
+                }
+            }
+
+            // Condition true (or no condition): stop here
             it->second.bp.disable();
             regs.pc = bp_addr;
             ptrace(PTRACE_SETREGSET, child, NT_PRSTATUS, &iov);
-
             pending_id = id_it->second;
-
             return true;
         };
+
 
         auto lazy_stepover_helper = [&](uint64_t bp_id){
             ptrace(PTRACE_SINGLESTEP, child, 0, 0);
@@ -211,18 +273,46 @@ int main(int argc, char** argv){
             if(cmd == "b"){
                 uint64_t addr = 0;
 
-                if(arg == ""){
-                    cerr << "usage: b <arg>" << endl;
+                if (arg.empty()) {
+                    cerr << "usage: b <addr> [if <reg> <op> <value>]" << endl;
                     continue;
                 }
-
+                   
                 if (!parse_addr(arg, addr)) {
                     addr = parser.get_function_addr(arg);
                     if(addr == 0){
-                    cerr << "usage: b <addr|name>" << endl;
+                     cerr << "usage: b <addr> [if <reg> <op> <value>]" << endl;
                     continue;
-                    }
+                        }
                 }
+                
+
+                // Optional condition parsing
+                bool has_cond = false;
+                string reg, op, valstr;
+                uint64_t cond_value = 0;
+
+                string kw;
+                if (iss >> kw) {
+                    if (kw != "if") {
+                        cerr << "usage: b <addr> [if <reg> <op> <value>]" << endl;
+                        continue;
+                    }
+                    if (!(iss >> reg >> op >> valstr)) {
+                        cerr << "usage: b <addr> [if <reg> <op> <value>]" << endl;
+                        continue;
+                    }
+                    if (op != "==" && op != "!=" && op != "<" && op != "<=" && op != ">" && op != ">=") {
+                        cerr << "usage: b <addr> [if <reg> <op> <value>]" << endl;
+                        continue;
+                    }
+                    if (!parse_addr(valstr, cond_value)) {
+                        cerr << "usage: b <addr> [if <reg> <op> <value>]" << endl;
+                        continue;
+                    }
+                    has_cond = true;
+                }
+               
                 auto id_it = addr_to_id.find(addr);
                 if (id_it == addr_to_id.end()) {
                     uint64_t id = next_bp_id++;
@@ -232,6 +322,12 @@ int main(int argc, char** argv){
                 }
 
                 auto it = breakpoints.find(id_it->second);
+
+                it->second.has_cond = has_cond;
+                it->second.cond_reg = reg;
+                it->second.cond_op = op;
+                it->second.cond_value = cond_value;
+
                 if (it != breakpoints.end()) {
                     it->second.bp.enable();
                 }
